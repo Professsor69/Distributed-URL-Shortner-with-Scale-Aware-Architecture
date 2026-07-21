@@ -49,6 +49,10 @@ GET /{short_code}
 | Eager cache on POST /shorten | First GET after creation is a HIT, not a MISS |
 | Bounded latency lists (1000 samples) | LPUSH+LTRIM — O(1) memory regardless of traffic |
 
+### Cache invalidation policy
+
+URLs in this system are **immutable after creation** — there is no update or delete endpoint, so stale cache entries are not possible by construction. The only invalidation path is time-based: if a URL has an `expires_at` set and the redirect endpoint detects it has passed, `delete_cached_url()` is called to evict the entry before returning 410 Gone. TTL-based eviction via `SETEX` handles the normal expiry case automatically. If URL mutability is added in a future phase, an explicit `delete_cached_url()` call would be required in the update/delete handler before or after the MySQL write.
+
 ### New endpoints
 
 | Endpoint | Description |
