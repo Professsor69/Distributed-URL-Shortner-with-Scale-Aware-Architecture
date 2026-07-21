@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from app.database import Base, engine
 from app.routers import url as url_router
+from app.routers import metrics as metrics_router
 
 
 @asynccontextmanager
@@ -42,3 +43,4 @@ app = FastAPI(
 )
 
 app.include_router(url_router.router)
+app.include_router(metrics_router.router)

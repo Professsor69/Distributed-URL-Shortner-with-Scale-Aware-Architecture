@@ -8,14 +8,68 @@ tested in SDE interviews at Google, Microsoft, and Amazon.
 
 ```
 Client
-  └── FastAPI Service (POST /shorten, GET /{code})
-        ├── Redis Cache      [Phase 2] — cache-aside, TTL eviction
-        ├── MySQL            [Phase 1] — source of truth (short_code → long_url)
-        └── RabbitMQ         [Phase 4] — async click event publishing
+  └── FastAPI Service (POST /shorten, GET /{code}, GET /metrics/*)
+        ├── Redis Cache      [Phase 2 ✅] — cache-aside, allkeys-lru, 256MB
+        ├── MySQL            [Phase 1 ✅] — source of truth (short_code → long_url)
+        └── RabbitMQ         [Phase 4]   — async click event publishing
               └── Worker → MongoDB — click analytics (geo, device, timestamp)
 
 Load Testing: Locust  [Phase 5]
-Infrastructure:       Docker Compose
+Infrastructure:       Docker Compose (MySQL + Redis now, full stack in Phase 6)
+```
+
+## Phase 2: Redis Cache-Aside (current)
+
+### How it works
+
+```
+GET /{short_code}
+  │
+  ├─ Redis GET url:cache:{short_code}
+  │      ├── HIT  → 307 redirect immediately  (no MySQL read)
+  │      │          increment click_count by cached url_id
+  │      │          X-Cache: HIT
+  │      │
+  │      └── MISS → MySQL SELECT short_code (indexed)
+  │                 Redis SETEX with TTL       (lazy loading)
+  │                 307 redirect
+  │                 X-Cache: MISS
+  │
+  └─ Latency recorded to Redis list → /metrics/latency
+```
+
+### Cache design decisions
+
+| Decision | Why |
+|---|---|
+| Store `{id, url}` JSON, not just `url` | On HIT, we need `url_id` for the atomic `click_count` UPDATE — no MySQL SELECT at all |
+| `SETEX` not `SET` + `EXPIRE` | SETEX is atomic — eliminates the race window where key exists without TTL |
+| `allkeys-lru` eviction policy | When Redis hits 256MB, least recently used URL is evicted — hot URLs survive |
+| Fail-open on all Redis errors | Redis outage → MySQL-only mode, zero failed requests |
+| Eager cache on POST /shorten | First GET after creation is a HIT, not a MISS |
+| Bounded latency lists (1000 samples) | LPUSH+LTRIM — O(1) memory regardless of traffic |
+
+### New endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /metrics/latency` | p50/p95/p99 for cache HITs vs MISSes + hit rate |
+| `GET /metrics/health` | Redis ping check |
+
+### Verifying cache behaviour (Postman / curl)
+
+```bash
+# First request — cache MISS (populates Redis)
+curl -v http://localhost:8000/000001
+# Response header: X-Cache: MISS
+
+# Second request — cache HIT (no MySQL read)
+curl -v http://localhost:8000/000001
+# Response header: X-Cache: HIT
+
+# View latency comparison
+curl http://localhost:8000/metrics/latency
+# { "cache_hit_rate": "50.0%", "cache_hits": {"p50_ms": 0.3, ...}, ... }
 ```
 
 ## Phase 1: Core Service (current)
