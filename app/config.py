@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 10   # max requests allowed per window
     rate_limit_window_seconds: int = 60  # rolling window size in seconds
 
+    # Async analytics (Phase 4) — RabbitMQ publisher + MongoDB consumer
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"  # AMQP connection URL
+    mongodb_uri: str = "mongodb://localhost:27017/urlshortener_analytics"  # includes DB name
+    analytics_queue: str = "click_events"  # durable queue shared by publisher and worker
+
     # The public-facing base URL used when constructing short links in responses
     base_url: str = "http://localhost:8000"
 
