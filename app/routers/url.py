@@ -13,10 +13,16 @@ GET /{short_code} now implements the full cache-aside pattern:
     3. Redis SETEX      — populate cache for next request (lazy loading)
     4. X-Cache header   — HIT or MISS, visible in Postman / curl / browser devtools
 
-POST /shorten now eagerly populates Redis after creation so the very
-first GET request is already a cache HIT.
-
+POST /shorten eagerly populates Redis after creation so the first GET is a HIT.
 On every redirect, latency is recorded to Redis lists for /metrics/latency.
+
+Phase 3 additions
+-----------------
+POST /shorten now enforces a per-IP sliding window rate limit via
+rate_limit_dependency. Rejected requests receive HTTP 429 with:
+    - X-RateLimit-Limit / Remaining / Window / Reset headers
+    - Retry-After: {window_seconds}
+All /shorten responses (pass AND fail) include X-RateLimit-* headers.
 """
 
 import time
@@ -30,6 +36,7 @@ from app import cache as url_cache
 from app.config import settings
 from app.crud import create_short_url, get_url_by_short_code, increment_click_count
 from app.database import get_db
+from app.dependencies import rate_limit_dependency
 from app.schemas import ShortenRequest, ShortenResponse, URLStatsResponse
 
 router = APIRouter()
@@ -45,12 +52,14 @@ router = APIRouter()
     description=(
         "Accepts a long URL and returns a short code. "
         "Idempotent: submitting the same URL twice returns the same short code. "
-        "Phase 2: the result is eagerly cached in Redis so the first GET is a HIT."
+        "Phase 2: eagerly cached in Redis so the first GET is a HIT. "
+        "Phase 3: rate-limited per IP (sliding window). Returns 429 when exceeded."
     ),
 )
 def shorten_url(
     payload: ShortenRequest,
     db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit_dependency),  # Phase 3: rate limit enforcement
 ) -> ShortenResponse:
     long_url = str(payload.url)
     url_obj, created = create_short_url(db, long_url, payload.expires_at)
