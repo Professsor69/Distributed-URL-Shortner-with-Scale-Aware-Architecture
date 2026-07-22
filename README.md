@@ -19,7 +19,52 @@ Load Testing: Locust  [Phase 5]
 Infrastructure:       Docker Compose (MySQL + Redis now, full stack in Phase 6)
 ```
 
-## Phase 3: Rate Limiting (current)
+## Phase 4: Async Click Analytics (current)
+
+### Architecture
+
+```
+GET /{short_code}
+  │
+  ├── Redis cache-aside (Phase 2)
+  ├── MySQL click_count++ (Phase 1)
+  └── publish_click_event() → RabbitMQ queue: "click_events"
+                                      │
+                                      │  (async, decoupled)
+                                      ▼
+                              worker/consumer.py
+                                      │
+                                      ▼
+                              MongoDB: click_events collection
+```
+
+### Why RabbitMQ over direct MongoDB writes?
+
+Synchronously writing to MongoDB on every redirect would add 5-20ms of database latency to the hottest path in the system. Publishing to RabbitMQ takes <1ms and allows the redirect to return immediately. If MongoDB is slow or temporarily down, messages queue up safely in RabbitMQ instead of blocking the redirect or dropping data.
+
+### Privacy: IP Hashing
+
+Raw IPs are never stored in the database. Each client's IP is SHA-256 hashed and truncated to 16 hex characters before publishing. This allows grouping clicks by "same device" within a session without storing PII (Personally Identifiable Information).
+
+### Running the Worker and Querying MongoDB
+
+Start the infrastructure:
+```bash
+docker compose up -d
+```
+
+Start the worker process (in a separate terminal):
+```bash
+python -m worker.consumer
+```
+
+Trigger some redirects via the API or browser, then query MongoDB:
+```bash
+docker exec -it urlshortener_mongodb mongosh urlshortener_analytics
+> db.click_events.find().pretty()
+```
+
+## Phase 3: Rate Limiting
 
 ### Algorithm: Sliding Window (Redis Sorted Set)
 
@@ -250,8 +295,9 @@ Returns 404 if code not found, 410 if expired.
 | Phase | Feature | Status |
 |---|---|---|
 | 1 | Core API + Base62 + MySQL | ✅ Done |
-| 2 | Redis cache-aside, latency metrics | 🔲 |
-| 3 | Custom token-bucket rate limiter | 🔲 |
-| 4 | RabbitMQ + async analytics worker | 🔲 |
+| 2 | Redis cache-aside, latency metrics | ✅ Done |
+| 3 | Custom sliding-window rate limiter | ✅ Done |
+| 4 | RabbitMQ + async analytics worker | ✅ Done |
 | 5 | Locust load testing, bottleneck analysis | 🔲 |
 | 6 | Full Docker Compose, analytics dashboard | 🔲 |
+
