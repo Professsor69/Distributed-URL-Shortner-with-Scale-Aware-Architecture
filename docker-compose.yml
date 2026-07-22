@@ -36,6 +36,44 @@ services:
       retries: 3
       start_period: 5s
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: urlshortener_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP — used by publisher and worker
+      - "15672:15672"  # Management UI — http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mongodb:
+    image: mongo:7
+    container_name: urlshortener_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
 volumes:
   mysql_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  mongodb_data:
     driver: local
