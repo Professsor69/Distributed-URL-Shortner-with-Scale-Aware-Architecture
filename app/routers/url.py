@@ -23,20 +23,30 @@ rate_limit_dependency. Rejected requests receive HTTP 429 with:
     - X-RateLimit-Limit / Remaining / Window / Reset headers
     - Retry-After: {window_seconds}
 All /shorten responses (pass AND fail) include X-RateLimit-* headers.
+
+Phase 4 additions
+-----------------
+GET /{short_code} now publishes a structured click event to RabbitMQ after
+serving the redirect. The event is consumed asynchronously by worker/consumer.py
+which writes rich analytics (timestamp, user_agent, referrer, ip_hash) to MongoDB.
+The publish is fire-and-forget: any RabbitMQ error is logged and swallowed;
+the redirect always succeeds even if the analytics pipeline is unavailable.
 """
 
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app import cache as url_cache
+from app import publisher as click_publisher
 from app.config import settings
 from app.crud import create_short_url, get_url_by_short_code, increment_click_count
 from app.database import get_db
 from app.dependencies import rate_limit_dependency
+from app.limiter import get_client_ip
 from app.schemas import ShortenRequest, ShortenResponse, URLStatsResponse
 
 router = APIRouter()
@@ -125,6 +135,7 @@ def get_stats(
 )
 def redirect_url(
     short_code: str,
+    request: Request,          # Phase 4: needed for User-Agent, Referer, IP
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     # ── Step 1: Redis lookup (cache-aside) ─────────────────────────────────────
@@ -138,6 +149,15 @@ def redirect_url(
         # We still increment click_count via an atomic SQL UPDATE using the cached ID.
         url_cache.record_latency(hit=True, latency_ms=redis_ms)
         increment_click_count(db, cached["id"])
+
+        # Phase 4: publish click event to RabbitMQ for async MongoDB analytics
+        click_publisher.publish_click_event(
+            short_code=short_code,
+            long_url=cached["url"],
+            user_agent=request.headers.get("User-Agent", ""),
+            referrer=request.headers.get("Referer", ""),
+            ip=get_client_ip(request),
+        )
 
         response = RedirectResponse(url=cached["url"], status_code=307)
         response.headers["X-Cache"] = "HIT"
@@ -175,6 +195,15 @@ def redirect_url(
 
     url_cache.record_latency(hit=False, latency_ms=total_ms)
     increment_click_count(db, url_obj.id)
+
+    # Phase 4: publish click event to RabbitMQ for async MongoDB analytics
+    click_publisher.publish_click_event(
+        short_code=short_code,
+        long_url=url_obj.long_url,
+        user_agent=request.headers.get("User-Agent", ""),
+        referrer=request.headers.get("Referer", ""),
+        ip=get_client_ip(request),
+    )
 
     response = RedirectResponse(url=url_obj.long_url, status_code=307)
     response.headers["X-Cache"] = "MISS"
