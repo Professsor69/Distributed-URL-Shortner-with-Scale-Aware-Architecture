@@ -10,12 +10,78 @@ tested in SDE interviews at Google, Microsoft, and Amazon.
 Client
   └── FastAPI Service (POST /shorten, GET /{code}, GET /metrics/*)
         ├── Redis Cache      [Phase 2 ✅] — cache-aside, allkeys-lru, 256MB
+        ├── Redis Limiter    [Phase 3 ✅] — sliding window, per-IP, Lua script
         ├── MySQL            [Phase 1 ✅] — source of truth (short_code → long_url)
         └── RabbitMQ         [Phase 4]   — async click event publishing
               └── Worker → MongoDB — click analytics (geo, device, timestamp)
 
 Load Testing: Locust  [Phase 5]
 Infrastructure:       Docker Compose (MySQL + Redis now, full stack in Phase 6)
+```
+
+## Phase 3: Rate Limiting (current)
+
+### Algorithm: Sliding Window (Redis Sorted Set)
+
+```
+POST /shorten  (per-IP)
+  │
+  ├─ Redis Lua script (atomic):
+  │      ZREMRANGEBYSCORE  ← evict requests older than window
+  │      ZADD              ← record this request (nanosecond member ID)
+  │      ZCARD             ← count requests in window
+  │      EXPIRE            ← auto-cleanup when IP goes silent
+  │
+  ├─ count ≤ limit → 201 Created  +  X-RateLimit-Remaining: N
+  └─ count  > limit → 429 Too Many Requests  +  Retry-After: 60
+```
+
+### Why sliding window over token bucket?
+
+| | Token Bucket | Sliding Window |
+|---|---|---|
+| Boundary exploit | Not applicable | Eliminated |
+| Burst at instant | Allows full N burst | Spread across window |
+| Accuracy | Approximate | Exact |
+| State | `{tokens, last_refill}` | Sorted set of timestamps |
+| Redis ops | HGET + HSET | ZADD + ZREMRANGEBYSCORE + ZCARD |
+
+The fixed-window flaw: send N at 23:59:59, N more at 00:00:01 → 2N in 2 seconds.
+Sliding window eliminates this: the count is always over exactly the last 60s.
+
+### Why Lua script for atomicity?
+
+Without atomicity, two concurrent requests can both see count=9 (limit=10)
+and both get approved — violating the limit. The Lua script runs all 4 Redis
+commands as one indivisible unit on the server. No interleaving possible.
+
+### Response headers on every POST /shorten
+
+```
+X-RateLimit-Limit:     10      ← max requests per window
+X-RateLimit-Remaining: 7       ← requests left in current window
+X-RateLimit-Window:    60s     ← window duration
+X-RateLimit-Reset:     1234567 ← Unix timestamp when window resets
+Retry-After:           60      ← only on 429 responses
+```
+
+### Verifying rate limiting (curl)
+
+```bash
+# 1. Send 11 requests rapidly (limit=10 by default)
+for i in $(seq 1 12); do
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://localhost:8000/shorten \\
+    -H "Content-Type: application/json" -d '{"url":"https://example.com"}'
+done
+# Expected: 201 201 201 201 201 201 201 201 201 201 429 429
+
+# 2. Inspect rate limit headers on a passing request
+curl -v -X POST http://localhost:8000/shorten \\
+  -H "Content-Type: application/json" -d '{"url":"https://example.com"}' 2>&1 | grep X-Rate
+# X-RateLimit-Limit: 10
+# X-RateLimit-Remaining: 6
+# X-RateLimit-Window: 60s
+# X-RateLimit-Reset: 1234567890
 ```
 
 ## Phase 2: Redis Cache-Aside (current)
