@@ -29,14 +29,36 @@ are processed when it recovers. A direct write would either block or lose data.
 
 Reliability model
 -----------------
-  basic_qos(prefetch_count=1)
-      → one unacked message in flight at a time; fair dispatch across workers
-  Manual ACK after insert_one
-      → message stays in queue until worker confirms successful write
-  NACK + requeue=False on bad JSON / schema error
-      → corrupt messages go to dead-letter, not loop forever
-  NACK + requeue=True on MongoDB error
-      → retry when DB recovers; message not lost
+  basic_qos(prefetch_count=1): process one message at a time, ensures
+      fair dispatch if multiple worker processes run in parallel.
+  Manual ACK: message stays in queue until worker confirms success.
+
+  AT-LEAST-ONCE DELIVERY (intentional design decision)
+  This worker provides at-least-once delivery, not exactly-once.
+  If a MongoDB insert succeeds but the network blips before the ACK
+  reaches RabbitMQ, the message is redelivered and inserted again.
+  Duplicate click events are therefore possible in MongoDB.
+  This is an accepted tradeoff: click analytics is not billing-critical
+  data, so slight overcounting on rare network failures is preferable
+  to the significant complexity of exactly-once deduplication (which
+  would require distributed transaction coordination or idempotency keys).
+
+  NACK + requeue=False on bad JSON: message is *dropped* (discarded).
+  There is no dead-letter queue (DLQ) configured in this phase — this
+  is a deliberate scope cut. In a production system, you would configure
+  a DLQ on the queue declaration so malformed messages are routed there
+  for inspection rather than silently discarded. Adding a DLQ is a
+  single `x-dead-letter-exchange` argument on `queue_declare` — kept
+  out of scope here to avoid infrastructure complexity.
+
+  NACK + requeue=True on DB error: retry when MongoDB recovers; message not lost.
+
+  SCALING PATH (not implemented, but trivial to add)
+  Run multiple instances of this worker process against the same queue.
+  RabbitMQ distributes messages across all consumers using basic_qos
+  round-robin dispatch. No code changes required — just start more
+  `python -m worker.consumer` processes or add more replicas in Docker.
+
   SIGTERM / SIGINT
       → stop_consuming() → close connection → exit 0
       → in-flight message is ACK'd before shutdown
@@ -147,11 +169,22 @@ def on_message(
     """
     RabbitMQ delivery callback — process message then ACK or NACK.
 
+    Delivery guarantee: AT-LEAST-ONCE.
+    If MongoDB insert succeeds but the ACK is lost in transit (network blip),
+    RabbitMQ redelivers the message and it is inserted again, producing a
+    duplicate click document in MongoDB. This is an intentional tradeoff:
+    click analytics is not billing-critical, so rare overcounting is
+    preferable to the complexity of exactly-once deduplication.
+
     ACK  (basic_ack)
         → successful MongoDB insert; message removed from queue permanently.
 
     NACK requeue=False (basic_nack)
-        → bad JSON or schema error; message goes to dead-letter queue.
+        → bad JSON or schema error; message is DROPPED (discarded).
+        → No dead-letter queue (DLQ) is configured in this phase — deliberate
+          scope cut. In production, add x-dead-letter-exchange to queue_declare
+          so malformed messages are routed to a DLQ for inspection rather than
+          silently lost.
         → Requeueing would loop forever on corrupt data.
 
     NACK requeue=True (basic_nack)

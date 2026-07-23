@@ -46,6 +46,25 @@ Synchronously writing to MongoDB on every redirect would add 5-20ms of database 
 
 Raw IPs are never stored in the database. Each client's IP is SHA-256 hashed and truncated to 16 hex characters before publishing. This allows grouping clicks by "same device" within a session without storing PII (Personally Identifiable Information).
 
+### Delivery Guarantee: At-Least-Once (intentional)
+
+This system provides **at-least-once delivery**, not exactly-once. If a MongoDB insert succeeds but the network blips before the ACK reaches RabbitMQ, the message is redelivered and the click is inserted again — producing a rare duplicate document. This is an **intentional, accepted tradeoff**: click analytics is not billing-critical data, so slight overcounting on rare network failures is preferable to the significant complexity of exactly-once deduplication (which would require idempotency keys or distributed transaction coordination).
+
+### Scaling the Worker
+
+To handle higher event throughput, run **multiple instances** of the consumer against the same queue:
+```bash
+# Terminal 1
+python -m worker.consumer
+# Terminal 2
+python -m worker.consumer
+```
+RabbitMQ distributes messages across all connected consumers via `basic_qos` round-robin dispatch. No code changes are required — it scales horizontally by adding more consumer processes or Docker replicas.
+
+### Dead-Letter Queue: Deliberate Scope Cut
+
+Malformed messages (invalid JSON, unexpected schema) are currently **dropped** via `basic_nack(requeue=False)` with no dead-letter queue (DLQ) configured. This is a deliberate scope decision to keep the infrastructure simple. In production, adding a DLQ is a single argument (`x-dead-letter-exchange`) to the `queue_declare` call — messages would be routed to an inspection queue instead of silently discarded.
+
 ### Running the Worker and Querying MongoDB
 
 Start the infrastructure:
