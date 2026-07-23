@@ -1,0 +1,38 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environment — never bake the local venv into the image
+venv/
+.venv/
+env/
+
+# Environment files — injected at runtime via docker-compose env_file
+# Never bake secrets into the image
+.env
+.env.example
+
+# Tests — not needed in the production image
+tests/
+conftest.py
+
+# Load test scripts and results
+load_test/
+
+# Git history
+.git/
+.gitignore
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentation (kept in repo but excluded from build context for speed)
+*.md
