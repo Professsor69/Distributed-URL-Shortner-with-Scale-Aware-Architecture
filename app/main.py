@@ -3,15 +3,22 @@ FastAPI application entry point.
 
 Lifespan context manager (replaces deprecated on_event handlers):
   - On startup : creates all tables via SQLAlchemy metadata (idempotent).
-  - On shutdown: nothing needed for Phase 1 (connection pool cleans itself).
+  - On shutdown: nothing needed (connection pool cleans itself).
 
-Running locally:
+Running locally (dev):
   uvicorn app.main:app --reload
+
+Running in production / Docker (Phase 6):
+  uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+Analytics dashboard:
+  http://localhost:8000/dashboard/
 """
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
 from app.routers import url as url_router
@@ -44,3 +51,7 @@ app = FastAPI(
 
 app.include_router(url_router.router)
 app.include_router(metrics_router.router)
+
+# Phase 6: serve the analytics dashboard as static files
+# Accessible at http://localhost:8000/dashboard/
+app.mount("/dashboard", StaticFiles(directory="dashboard", html=True), name="dashboard")
