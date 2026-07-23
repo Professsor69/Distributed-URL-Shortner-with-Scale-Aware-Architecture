@@ -9,7 +9,13 @@ Connection pool settings (tuned in Phase 5 after load testing)
                         At 4 uvicorn workers: 4 × 20 = 80 base connections.
   max_overflow=40     : extra connections allowed when pool is exhausted.
                         At 4 workers: 4 × 60 = 240 max total connections.
-                        Ensure MySQL max_connections > 240 in production.
+
+  KNOWN LIMIT (deliberate scope cut): MySQL 8.0 defaults to
+  max_connections=151, which is below the 240 this config can reach.
+  This is not fixed in this phase — PgBouncer or ProxySQL as a connection
+  pooler in front of MySQL is the production path. Adding it here would
+  require significant infrastructure complexity for a portfolio project.
+  Labelled as a known tradeoff, not an oversight.
   pool_timeout=10     : seconds to wait for a free connection before raising.
                         Fail fast (10s) rather than the default 30s stall.
   pool_recycle=3600   : recycle connections after 1 hour to prevent stale

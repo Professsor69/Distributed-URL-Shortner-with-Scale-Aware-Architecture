@@ -158,9 +158,15 @@ engine = create_engine(
 ```
 
 At 4 workers × (20 + 40) = **240 maximum MySQL connections**.
-MySQL 8.0 default `max_connections=151` — so for full-scale production
-you'd also increase MySQL's `max_connections` or add ProxySQL/PgBouncer.
-This is the next scale story to tell in interviews.
+
+> **Known Limit — Deliberate Scope Cut**
+>
+> MySQL 8.0 defaults to `max_connections=151`, which is below the 240 this
+> config can reach under full load. This is not resolved in Phase 5.
+> The production path is to add **PgBouncer or ProxySQL** as a connection
+> pooler in front of MySQL — or to raise `max_connections` in MySQL config.
+> Adding either is excluded here to keep infrastructure complexity manageable
+> for a portfolio project. This is a labelled tradeoff, not an oversight.
 
 ---
 
