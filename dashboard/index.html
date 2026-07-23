@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URL Shortener — Analytics Dashboard</title>
+  <meta name="description" content="Real-time analytics for the distributed URL shortener service." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Design tokens ────────────────────────────────────────────────────── */
+    :root {
+      --bg:          #0a0f1e;
+      --surface:     #111827;
+      --surface2:    #1a2235;
+      --border:      rgba(99,102,241,0.2);
+      --accent:      #6366f1;
+      --accent-glow: rgba(99,102,241,0.15);
+      --success:     #10b981;
+      --warning:     #f59e0b;
+      --danger:      #ef4444;
+      --text:        #f1f5f9;
+      --text-muted:  #64748b;
+      --text-dim:    #94a3b8;
+      --radius:      12px;
+      --radius-lg:   20px;
+    }
+
+    /* ── Reset ────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Background glow ──────────────────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -40%;
+      left: -20%;
+      width: 80vw;
+      height: 80vw;
+      background: radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), #818cf8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      flex-shrink: 0;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+
+    .header-text h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .header-text p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .status-dot {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    .dot.offline { background: var(--danger); box-shadow: 0 0 8px var(--danger); animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Cards / Glass ────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.75rem;
+      backdrop-filter: blur(10px);
+      transition: border-color 0.2s;
+    }
+
+    .card:hover { border-color: rgba(99,102,241,0.4); }
+
+    .card-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+    }
+
+    /* ── Search section ───────────────────────────────────────────────────── */
+    .search-card { margin-bottom: 1.25rem; }
+
+    .input-row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+
+    .input-wrapper {
+      flex: 1;
+      position: relative;
+    }
+
+    .input-prefix {
+      position: absolute;
+      left: 1rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      height: 48px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      padding: 0 1rem 0 8.5rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    input[type="text"]::placeholder { color: var(--text-muted); }
+
+    button {
+      height: 48px;
+      padding: 0 1.5rem;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(99,102,241,0.35);
+    }
+
+    .btn-primary:hover {
+      background: #818cf8;
+      box-shadow: 0 4px 20px rgba(99,102,241,0.5);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:active { transform: translateY(0); }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── Stats grid ───────────────────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+      transition: all 0.2s;
+    }
+
+    .stat-card:hover {
+      border-color: rgba(99,102,241,0.4);
+      transform: translateY(-2px);
+    }
+
+    .stat-label {
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .stat-value.accent  { color: var(--accent); }
+    .stat-value.success { color: var(--success); }
+    .stat-value.warning { color: var(--warning); }
+
+    .stat-sub {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-top: 0.3rem;
+    }
+
+    /* ── URL result card ──────────────────────────────────────────────────── */
+    .url-card { margin-bottom: 1.25rem; }
+
+    .url-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1rem;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 0.75rem;
+    }
+
+    .url-row:last-child { margin-bottom: 0; }
+
+    .url-key {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      min-width: 90px;
+      flex-shrink: 0;
+    }
+
+    .url-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .url-val a { color: var(--accent); text-decoration: none; }
+    .url-val a:hover { text-decoration: underline; }
+
+    .copy-btn {
+      height: 30px;
+      padding: 0 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .copy-btn.copied { border-color: var(--success); color: var(--success); }
+
+    /* ── Metrics section ──────────────────────────────────────────────────── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+
+    .metric-bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-bottom: 0.4rem;
+    }
+
+    .bar-track {
+      height: 6px;
+      background: var(--surface2);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), #818cf8);
+      transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .bar-fill.success { background: linear-gradient(90deg, var(--success), #34d399); }
+
+    /* ── Latency table ────────────────────────────────────────────────────── */
+    .latency-table { width: 100%; border-collapse: collapse; }
+
+    .latency-table th, .latency-table td {
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      font-size: 0.78rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .latency-table th {
+      color: var(--text-muted);
+      font-weight: 500;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .latency-table td { color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+    .latency-table tr:last-child td { border-bottom: none; }
+    .latency-table .hit-row td { color: var(--success); }
+    .latency-table .miss-row td { color: var(--warning); }
+
+    /* ── States ───────────────────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    .skeleton {
+      background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 6px;
+    }
+
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+    .error-msg {
+      color: var(--danger);
+      font-size: 0.82rem;
+      padding: 0.75rem 1rem;
+      background: rgba(239,68,68,0.08);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: var(--radius);
+      margin-top: 0.75rem;
+    }
+
+    .section-gap { margin-bottom: 1.25rem; }
+
+    /* ── Footer ───────────────────────────────────────────────────────────── */
+    footer {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">🔗</div>
+    <div class="header-text">
+      <h1>URL Shortener Analytics</h1>
+      <p>Real-time stats from your distributed shortener</p>
+    </div>
+    <div class="status-dot">
+      <div class="dot" id="api-dot"></div>
+      <span id="api-status">Checking…</span>
+    </div>
+  </header>
+
+  <!-- Lookup -->
+  <div class="card search-card section-gap">
+    <div class="card-title">Look Up a Short Code</div>
+    <div class="input-row">
+      <div class="input-wrapper">
+        <span class="input-prefix">localhost:8000 /</span>
+        <input
+          type="text"
+          id="code-input"
+          placeholder="000001"
+          maxlength="16"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <button class="btn-primary" id="lookup-btn" onclick="lookupCode()">Look up →</button>
+    </div>
+    <div class="error-msg hidden" id="error-msg"></div>
+  </div>
+
+  <!-- Stats grid (shown after lookup) -->
+  <div class="stats-grid section-gap hidden" id="stats-section">
+    <div class="stat-card">
+      <div class="stat-label">Total Clicks</div>
+      <div class="stat-value accent" id="stat-clicks">—</div>
+      <div class="stat-sub" id="stat-clicks-sub"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Created At</div>
+      <div class="stat-value" style="font-size:1rem; padding-top:0.3rem;" id="stat-created">—</div>
+      <div class="stat-sub" id="stat-expires"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Status</div>
+      <div class="stat-value success" id="stat-status">Active</div>
+      <div class="stat-sub" id="stat-status-sub">Redirect live</div>
+    </div>
+  </div>
+
+  <!-- URL detail card -->
+  <div class="card url-card section-gap hidden" id="url-section">
+    <div class="card-title">URL Details</div>
+    <div class="url-row">
+      <span class="url-key">Short URL</span>
+      <span class="url-val" id="detail-short"></span>
+      <button class="copy-btn" id="copy-btn" onclick="copyShortUrl()">Copy</button>
+    </div>
+    <div class="url-row">
+      <span class="url-key">Destination</span>
+      <span class="url-val" id="detail-long"></span>
+    </div>
+  </div>
+
+  <!-- System metrics (always visible) -->
+  <div class="card section-gap">
+    <div class="card-title">Live System Metrics</div>
+    <div class="metrics-grid" id="metrics-grid">
+      <div>
+        <div class="metric-bar-label">
+          <span>Cache Hit Rate</span>
+          <span id="hit-rate-pct">—</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill success" id="hit-bar" style="width:0%"></div></div>
+      </div>
+      <div>
+        <div class="metric-bar-label">
+          <span>Requests tracked</span>
+          <span id="req-tracked">—</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" id="req-bar" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Latency table -->
+  <div class="card section-gap" id="latency-card">
+    <div class="card-title">Latency Percentiles (Redis Sampled)</div>
+    <table class="latency-table">
+      <thead>
+        <tr><th>Path</th><th>p50 (ms)</th><th>p95 (ms)</th><th>p99 (ms)</th><th>Samples</th></tr>
+      </thead>
+      <tbody id="latency-body">
+        <tr><td colspan="5" style="color:var(--text-muted); font-style:italic; font-family:Inter,sans-serif;">Fetching metrics…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    Built with FastAPI + Redis + MySQL + RabbitMQ + MongoDB —
+    <a href="/docs" target="_blank">Swagger UI</a> ·
+    <a href="http://localhost:15672" target="_blank">RabbitMQ UI</a> ·
+    Phase 6 — Distributed URL Shortener
+  </footer>
+
+</div>
+
+<script>
+  const API = window.location.origin;
+  let _shortUrlForCopy = '';
+
+  /* ── Health check ────────────────────────────────────────────────────────── */
+  async function checkHealth() {
+    const dot  = document.getElementById('api-dot');
+    const span = document.getElementById('api-status');
+    try {
+      const r = await fetch(`${API}/metrics/health`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) {
+        dot.className = 'dot';
+        span.textContent = 'API online';
+      } else {
+        throw new Error();
+      }
+    } catch {
+      dot.className = 'dot offline';
+      span.textContent = 'API offline';
+    }
+  }
+
+  /* ── Metrics ─────────────────────────────────────────────────────────────── */
+  async function refreshMetrics() {
+    try {
+      const r = await fetch(`${API}/metrics/latency`);
+      if (!r.ok) return;
+      const data = await r.json();
+
+      /* Hit rate bar */
+      const pct = parseFloat(data.cache_hit_rate) || 0;
+      document.getElementById('hit-rate-pct').textContent = data.cache_hit_rate ?? '—';
+      document.getElementById('hit-bar').style.width = Math.min(pct, 100) + '%';
+
+      /* Requests bar (cap at 1000 for display) */
+      const hits   = data.cache_hits?.count  ?? 0;
+      const misses = data.cache_misses?.count ?? 0;
+      const total  = hits + misses;
+      document.getElementById('req-tracked').textContent = total;
+      document.getElementById('req-bar').style.width = Math.min(total / 10, 100) + '%';
+
+      /* Latency table */
+      const rows = [];
+      if (data.cache_hits && hits > 0) {
+        const h = data.cache_hits;
+        rows.push(`<tr class="hit-row">
+          <td>GET /{code} HIT</td>
+          <td>${fmt(h.p50_ms)}</td>
+          <td>${fmt(h.p95_ms)}</td>
+          <td>${fmt(h.p99_ms)}</td>
+          <td>${hits}</td>
+        </tr>`);
+      }
+      if (data.cache_misses && misses > 0) {
+        const m = data.cache_misses;
+        rows.push(`<tr class="miss-row">
+          <td>GET /{code} MISS</td>
+          <td>${fmt(m.p50_ms)}</td>
+          <td>${fmt(m.p95_ms)}</td>
+          <td>${fmt(m.p99_ms)}</td>
+          <td>${misses}</td>
+        </tr>`);
+      }
+      document.getElementById('latency-body').innerHTML =
+        rows.length ? rows.join('') :
+        '<tr><td colspan="5" style="color:var(--text-muted);font-style:italic;font-family:Inter,sans-serif;">No requests yet — try looking up a short code above.</td></tr>';
+    } catch (e) {
+      /* silently fail — metrics are best-effort */
+    }
+  }
+
+  function fmt(v) {
+    if (v == null) return '—';
+    return Number(v).toFixed(2);
+  }
+
+  /* ── Lookup ──────────────────────────────────────────────────────────────── */
+  async function lookupCode() {
+    const input = document.getElementById('code-input');
+    const btn   = document.getElementById('lookup-btn');
+    const code  = input.value.trim();
+    const errEl = document.getElementById('error-msg');
+
+    if (!code) { showError('Enter a short code first.'); return; }
+
+    errEl.classList.add('hidden');
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+
+    try {
+      const r = await fetch(`${API}/stats/${encodeURIComponent(code)}`);
+      if (r.status === 404) { showError(`Short code "${code}" not found.`); return; }
+      if (r.status === 410) { showError(`Short code "${code}" has expired.`);  return; }
+      if (!r.ok) { showError(`Server error (${r.status}). Is the API running?`); return; }
+
+      const data = await r.json();
+      renderStats(data, code);
+      await refreshMetrics();
+    } catch (e) {
+      showError('Could not reach the API. Check that the server is running on port 8000.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Look up →';
+    }
+  }
+
+  function renderStats(data, code) {
+    /* Stats cards */
+    document.getElementById('stat-clicks').textContent = data.click_count ?? 0;
+    document.getElementById('stat-clicks-sub').textContent =
+      data.click_count === 1 ? '1 redirect served' : `${data.click_count} redirects served`;
+
+    const created = data.created_at
+      ? new Date(data.created_at + 'Z').toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
+      : '—';
+    document.getElementById('stat-created').textContent = created;
+
+    const expires = data.expires_at
+      ? `Expires ${new Date(data.expires_at + 'Z').toLocaleDateString('en-GB')}`
+      : 'No expiry set';
+    document.getElementById('stat-expires').textContent = expires;
+
+    const expired = data.expires_at && new Date(data.expires_at + 'Z') < new Date();
+    document.getElementById('stat-status').textContent = expired ? 'Expired' : 'Active';
+    document.getElementById('stat-status').className   = 'stat-value ' + (expired ? 'warning' : 'success');
+    document.getElementById('stat-status-sub').textContent = expired ? '410 Gone' : 'Redirect live';
+
+    document.getElementById('stats-section').classList.remove('hidden');
+
+    /* URL detail */
+    const shortUrl = `${API}/${code}`;
+    _shortUrlForCopy = shortUrl;
+
+    document.getElementById('detail-short').innerHTML =
+      `<a href="${shortUrl}" target="_blank">${shortUrl}</a>`;
+    document.getElementById('detail-long').innerHTML =
+      `<a href="${data.long_url}" target="_blank" rel="noopener">${data.long_url}</a>`;
+
+    document.getElementById('url-section').classList.remove('hidden');
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    document.getElementById('stats-section').classList.add('hidden');
+    document.getElementById('url-section').classList.add('hidden');
+  }
+
+  /* ── Copy to clipboard ───────────────────────────────────────────────────── */
+  async function copyShortUrl() {
+    if (!_shortUrlForCopy) return;
+    const btn = document.getElementById('copy-btn');
+    try {
+      await navigator.clipboard.writeText(_shortUrlForCopy);
+      btn.textContent = 'Copied ✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    } catch {
+      btn.textContent = 'Failed';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    }
+  }
+
+  /* ── Enter key support ───────────────────────────────────────────────────── */
+  document.getElementById('code-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') lookupCode();
+  });
+
+  /* ── Bootstrap ───────────────────────────────────────────────────────────── */
+  checkHealth();
+  refreshMetrics();
+  setInterval(checkHealth,     15_000);
+  setInterval(refreshMetrics,  10_000);
+</script>
+</body>
+</html>
