@@ -651,10 +651,16 @@
   async function lookupCode() {
     const input = document.getElementById('code-input');
     const btn   = document.getElementById('lookup-btn');
-    const code  = input.value.trim();
+    let code    = input.value.trim();
     const errEl = document.getElementById('error-msg');
 
     if (!code) { showError('Enter a short code first.'); return; }
+
+    // Fallback: If user pasted a full or relative URL, extract only the final path segment (the short code)
+    if (code.includes('/')) {
+      const parts = code.split('/');
+      code = parts[parts.length - 1] || parts[parts.length - 2];
+    }
 
     errEl.classList.add('hidden');
     btn.disabled = true;
