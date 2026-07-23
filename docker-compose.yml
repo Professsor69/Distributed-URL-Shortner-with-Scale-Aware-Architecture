@@ -1,4 +1,27 @@
+# Full-stack docker-compose for the URL Shortener system.
+#
+# Services (all 6):
+#   mysql     — source of truth (short_code → long_url, click_count)
+#   redis     — cache-aside layer + rate limiter sorted sets
+#   rabbitmq  — async click event queue (Phase 4)
+#   mongodb   — click analytics store (Phase 4)
+#   api       — FastAPI service, 4 uvicorn workers (Phase 5 optimisation)
+#   worker    — RabbitMQ consumer → MongoDB writer (Phase 4)
+#
+# Startup order is enforced via depends_on + condition: service_healthy.
+# All infra healthchecks were added in Phases 1–4.
+# Single command to bring up the entire system:
+#   docker compose up -d
+#
+# Management UIs:
+#   FastAPI Swagger:  http://localhost:8000/docs
+#   Analytics dash:  http://localhost:8000/dashboard/
+#   RabbitMQ UI:     http://localhost:15672  (guest / guest)
+
 services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
   mysql:
     image: mysql:8.0
     container_name: urlshortener_mysql
@@ -10,6 +33,8 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    networks:
+      - app_network
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
       interval: 10s
@@ -29,6 +54,8 @@ services:
       --maxmemory-policy allkeys-lru
       --save ""
       --appendonly no
+    networks:
+      - app_network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -41,13 +68,15 @@ services:
     container_name: urlshortener_rabbitmq
     restart: unless-stopped
     ports:
-      - "5672:5672"    # AMQP — used by publisher and worker
-      - "15672:15672"  # Management UI — http://localhost:15672 (guest/guest)
+      - "5672:5672"     # AMQP — used by api publisher and worker consumer
+      - "15672:15672"   # Management UI — http://localhost:15672 (guest/guest)
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app_network
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 15s
@@ -63,12 +92,74 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    networks:
+      - app_network
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ── Application ──────────────────────────────────────────────────────────────
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: urlshortener_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Override localhost defaults for Docker inter-service communication.
+      # Service names resolve via Docker's internal DNS on app_network.
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - MONGODB_URI=mongodb://mongodb:27017/urlshortener_analytics
+      - BASE_URL=http://localhost:8000
+    networks:
+      - app_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: urlshortener_worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Worker only needs RabbitMQ and MongoDB
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - MONGODB_URI=mongodb://mongodb:27017/urlshortener_analytics
+    networks:
+      - app_network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+
+# ── Shared network ────────────────────────────────────────────────────────────
+# Bridge network scoped to this project — services communicate by name.
+# Ports are only exposed to the host where explicitly declared above.
+
+networks:
+  app_network:
+    driver: bridge
+
+# ── Persistent volumes ────────────────────────────────────────────────────────
 
 volumes:
   mysql_data:
