@@ -1,365 +1,231 @@
-# URL Shortener — Distributed, Scale-Aware Architecture
+# Distributed URL Shortener — Scale-Aware Architecture
 
-A URL shortening service built to demonstrate real system design and scalability
-thinking — not just CRUD. Each architectural decision maps directly to a concept
-tested in SDE interviews at Google, Microsoft, and Amazon.
+A URL shortening service designed from the ground up to demonstrate real system-design thinking — not just CRUD. Every architectural decision traces directly to a concept tested in SDE interviews at Google, Meta, Amazon, and Microsoft. Built across 6 progressive phases, each one adding a production-grade layer with measured, quantified trade-offs.
 
-## Architecture Overview
+---
+
+## Architecture
 
 ```
-Client
-  └── FastAPI Service (POST /shorten, GET /{code}, GET /metrics/*)
-        ├── Redis Cache      [Phase 2 ✅] — cache-aside, allkeys-lru, 256MB
-        ├── Redis Limiter    [Phase 3 ✅] — sliding window, per-IP, Lua script
-        ├── MySQL            [Phase 1 ✅] — source of truth (short_code → long_url)
-        └── RabbitMQ         [Phase 4 ✅] — async click event publishing
-              └── Worker → MongoDB — click analytics (geo, device, timestamp)
+                          ┌─────────────────────────────────────────┐
+                          │        FastAPI Service (4 workers)       │
+   Client ───────────────▶│  POST /shorten  ·  GET /{code}          │
+                          │  GET /stats/{code}  ·  GET /metrics/*    │
+                          │  GET /dashboard/                         │
+                          └──┬──────────┬──────────────┬────────────┘
+                             │          │              │
+                     ┌───────▼──┐  ┌────▼─────┐  ┌───▼────────────┐
+                     │  Redis   │  │  MySQL   │  │   RabbitMQ     │
+                     │  Cache   │  │  Source  │  │   Click Queue  │
+                     │  Phase 2 │  │  of Truth│  │   Phase 4      │
+                     │  256MB   │  │  Phase 1 │  └───────┬────────┘
+                     │  LRU     │  │  InnoDB  │          │ async
+                     └──────────┘  └──────────┘  ┌───────▼────────┐
+                                                  │  Worker        │
+                     ┌──────────┐                 │  consumer.py   │
+                     │  Redis   │                 └───────┬────────┘
+                     │  Limiter │                         │
+                     │  Phase 3 │                 ┌───────▼────────┐
+                     │  Sliding │                 │   MongoDB      │
+                     │  Window  │                 │   Click Events │
+                     └──────────┘                 │   Phase 4      │
+                                                  └────────────────┘
 
-Load Testing: Locust [Phase 5 ✅] — 312 RPS baseline → 1283 RPS post-fix
-Infrastructure:      Docker Compose (full stack Phase 6)
+Load Tested: Locust — 312 RPS (50u) → 1,283 RPS (200u, 4 workers)  [Phase 5]
+Containerized: docker compose up -d brings up all 6 services         [Phase 6]
 ```
 
-## Phase 5: Load Testing with Locust (current)
+---
 
-### Setup
+## Setup — One Command
+
 ```bash
-pip install locust>=2.31.0
-docker compose up -d           # MySQL, Redis, RabbitMQ, MongoDB
-uvicorn app.main:app --reload  # single-worker baseline
+git clone https://github.com/Professsor69/Distributed-URL-Shortner-with-Scale-Aware-Architecture
+cd Distributed-URL-Shortner-with-Scale-Aware-Architecture
+cp .env.example .env        # defaults work out-of-the-box with docker-compose
+docker compose up -d        # builds images, starts all 6 services
 ```
 
-### Run the Load Test
+Wait ~30 seconds for MySQL and RabbitMQ to pass their healthchecks, then:
+
+| URL | What |
+|---|---|
+| `http://localhost:8000/docs` | Swagger UI — interactive API explorer |
+| `http://localhost:8000/dashboard/` | Analytics dashboard |
+| `http://localhost:15672` | RabbitMQ management (guest / guest) |
+
+**Local development (no Docker):**
 ```bash
-# Headless (saves HTML report)
-locust --headless --users 50 --spawn-rate 5 --run-time 60s \
-       --host http://localhost:8000 \
-       --html load_test/results/baseline_report.html \
-       -f load_test/locustfile.py
-
-# Interactive (web UI at http://localhost:8089)
-locust --host http://localhost:8000 -f load_test/locustfile.py
-
-# PowerShell convenience script (runs baseline + high-load automatically)
-.\load_test\run_load_test.ps1
+python -m venv venv && venv\Scripts\activate
+pip install -r requirements.txt
+docker compose up -d mysql redis rabbitmq mongodb   # infra only
+uvicorn app.main:app --reload                        # API dev server
+python -m worker.consumer                           # worker (second terminal)
 ```
 
-### Results Summary
+---
 
-| Scenario | Users | RPS | GET redirect p95 | Error % |
-|---|---|---|---|---|
-| Baseline (1 worker) | 50 | 312 | 12ms | 0% |
-| High load (1 worker) | 200 | 475 | 180ms ⚠️ | 0% |
-| Post-fix (4 workers) | 200 | 1283 | 18ms ✅ | 0% |
+## Features
 
-**Cache hit rate:** 94.2% (baseline) → 96.1% (post-fix)  
-**Rate limit 429s:** Expected — all Locust workers share `127.0.0.1`, caught as success in the test script.
+| Feature | Implementation | Phase |
+|---|---|---|
+| URL shortening | Base62 encoder on auto-increment MySQL ID | 1 |
+| Idempotent shortening | SHA-256 URL hash → UNIQUE INDEX | 1 |
+| Click tracking | Atomic `UPDATE click_count = click_count + 1` | 1 |
+| URL expiry | `expires_at` column + 410 Gone response | 1 |
+| Redirect caching | Redis cache-aside, `SETEX`, `allkeys-lru` | 2 |
+| Latency metrics | `GET /metrics/latency` — p50/p95/p99 HIT vs MISS | 2 |
+| Rate limiting | Sliding window, per-IP, atomic Lua script | 3 |
+| Async click analytics | RabbitMQ publish → MongoDB consumer worker | 4 |
+| Privacy | SHA-256 IP hashing (16-char hex, never raw IPs) | 4 |
+| Load tested | Locust — 1,283 RPS, p95 18ms at 200 concurrent users | 5 |
+| Containerized | docker compose up -d — 6 services, healthcheck-ordered | 6 |
+| Analytics dashboard | Dark-mode web UI — click count, cache metrics, latency table | 6 |
+
+---
+
+## Phase 5: Load Test Results
+
+> The most important performance story in this project.
+
+### Test setup
+- Tool: Locust `--headless --users N --spawn-rate 5 --run-time 60s`
+- Task weights: 70% GET redirect · 20% GET stats · 10% POST shorten
+- All Locust workers share `127.0.0.1` (rate limiting 429s counted as success)
+
+### Results
+
+| Scenario | Users | Total RPS | GET redirect p50 | GET redirect p95 | Error % |
+|---|---|---|---|---|---|
+| Baseline | 50 | **312** | 3ms | 12ms | 0% |
+| High load — before fix | 200 | 475 | 15ms | **180ms** ⚠️ | 0% |
+| High load — after fix | 200 | **1,283** | 2ms | **18ms** ✅ | 0% |
+
+**Cache hit rate:** 94.2% → 96.1% · **Improvement: +170% RPS, 10× lower p95**
 
 ### Bottleneck: Python GIL
 
-The bottleneck under 200 concurrent users was **not the database** — MySQL queries were fast. The bottleneck was the **single uvicorn process** (GIL: one Python thread runs at a time).
+The bottleneck at 200 users was **not MySQL, not Redis, not the connection pool** — it was Python's GIL. A single uvicorn process means one thread executes Python bytecode at a time. With 200 concurrent requests, threads queue for a single CPU slot.
 
-**Fix: `uvicorn app.main:app --workers 4`**  
-No code change. 4 independent Python processes, each with its own thread pool. RPS 475 → 1283 (+170%), p95 180ms → 18ms (10× faster).
+**Fix: `uvicorn app.main:app --workers 4`**
 
-See the full analysis: [`load_test/results/load_test_report.md`](load_test/results/load_test_report.md)
+Zero code change. Four independent processes → four GIL domains → four CPU cores. Already baked into the Docker image `CMD` in `Dockerfile`.
 
+Full analysis: [`load_test/results/load_test_report.md`](load_test/results/load_test_report.md)
 
-### Architecture
-
-```
-GET /{short_code}
-  │
-  ├── Redis cache-aside (Phase 2)
-  ├── MySQL click_count++ (Phase 1)
-  └── publish_click_event() → RabbitMQ queue: "click_events"
-                                      │
-                                      │  (async, decoupled)
-                                      ▼
-                              worker/consumer.py
-                                      │
-                                      ▼
-                              MongoDB: click_events collection
-```
-
-### Why RabbitMQ over direct MongoDB writes?
-
-Synchronously writing to MongoDB on every redirect would add 5-20ms of database latency to the hottest path in the system. Publishing to RabbitMQ takes <1ms and allows the redirect to return immediately. If MongoDB is slow or temporarily down, messages queue up safely in RabbitMQ instead of blocking the redirect or dropping data.
-
-### Privacy: IP Hashing
-
-Raw IPs are never stored in the database. Each client's IP is SHA-256 hashed and truncated to 16 hex characters before publishing. This allows grouping clicks by "same device" within a session without storing PII (Personally Identifiable Information).
-
-### Delivery Guarantee: At-Least-Once (intentional)
-
-This system provides **at-least-once delivery**, not exactly-once. If a MongoDB insert succeeds but the network blips before the ACK reaches RabbitMQ, the message is redelivered and the click is inserted again — producing a rare duplicate document. This is an **intentional, accepted tradeoff**: click analytics is not billing-critical data, so slight overcounting on rare network failures is preferable to the significant complexity of exactly-once deduplication (which would require idempotency keys or distributed transaction coordination).
-
-### Scaling the Worker
-
-To handle higher event throughput, run **multiple instances** of the consumer against the same queue:
-```bash
-# Terminal 1
-python -m worker.consumer
-# Terminal 2
-python -m worker.consumer
-```
-RabbitMQ distributes messages across all connected consumers via `basic_qos` round-robin dispatch. No code changes are required — it scales horizontally by adding more consumer processes or Docker replicas.
-
-### Dead-Letter Queue: Deliberate Scope Cut
-
-Malformed messages (invalid JSON, unexpected schema) are currently **dropped** via `basic_nack(requeue=False)` with no dead-letter queue (DLQ) configured. This is a deliberate scope decision to keep the infrastructure simple. In production, adding a DLQ is a single argument (`x-dead-letter-exchange`) to the `queue_declare` call — messages would be routed to an inspection queue instead of silently discarded.
-
-### Running the Worker and Querying MongoDB
-
-Start the infrastructure:
-```bash
-docker compose up -d
-```
-
-Start the worker process (in a separate terminal):
-```bash
-python -m worker.consumer
-```
-
-Trigger some redirects via the API or browser, then query MongoDB:
-```bash
-docker exec -it urlshortener_mongodb mongosh urlshortener_analytics
-> db.click_events.find().pretty()
-```
-
-## Phase 3: Rate Limiting
-
-### Algorithm: Sliding Window (Redis Sorted Set)
-
-```
-POST /shorten  (per-IP)
-  │
-  ├─ Redis Lua script (atomic):
-  │      ZREMRANGEBYSCORE  ← evict requests older than window
-  │      ZADD              ← record this request (nanosecond member ID)
-  │      ZCARD             ← count requests in window
-  │      EXPIRE            ← auto-cleanup when IP goes silent
-  │
-  ├─ count ≤ limit → 201 Created  +  X-RateLimit-Remaining: N
-  └─ count  > limit → 429 Too Many Requests  +  Retry-After: 60
-```
-
-### Why sliding window over token bucket?
-
-| | Token Bucket | Sliding Window |
-|---|---|---|
-| Boundary exploit | Not applicable | Eliminated |
-| Burst at instant | Allows full N burst | Spread across window |
-| Accuracy | Approximate | Exact |
-| State | `{tokens, last_refill}` | Sorted set of timestamps |
-| Redis ops | HGET + HSET | ZADD + ZREMRANGEBYSCORE + ZCARD |
-
-The fixed-window flaw: send N at 23:59:59, N more at 00:00:01 → 2N in 2 seconds.
-Sliding window eliminates this: the count is always over exactly the last 60s.
-
-### Why Lua script for atomicity?
-
-Without atomicity, two concurrent requests can both see count=9 (limit=10)
-and both get approved — violating the limit. The Lua script runs all 4 Redis
-commands as one indivisible unit on the server. No interleaving possible.
-
-### Response headers on every POST /shorten
-
-```
-X-RateLimit-Limit:     10      ← max requests per window
-X-RateLimit-Remaining: 7       ← requests left in current window
-X-RateLimit-Window:    60s     ← window duration
-X-RateLimit-Reset:     1234567 ← Unix timestamp when window resets
-Retry-After:           60      ← only on 429 responses
-```
-
-### Verifying rate limiting (curl)
-
-```bash
-# 1. Send 11 requests rapidly (limit=10 by default)
-for i in $(seq 1 12); do
-  curl -s -o /dev/null -w "%{http_code} " -X POST http://localhost:8000/shorten \\
-    -H "Content-Type: application/json" -d '{"url":"https://example.com"}'
-done
-# Expected: 201 201 201 201 201 201 201 201 201 201 429 429
-
-# 2. Inspect rate limit headers on a passing request
-curl -v -X POST http://localhost:8000/shorten \\
-  -H "Content-Type: application/json" -d '{"url":"https://example.com"}' 2>&1 | grep X-Rate
-# X-RateLimit-Limit: 10
-# X-RateLimit-Remaining: 6
-# X-RateLimit-Window: 60s
-# X-RateLimit-Reset: 1234567890
-```
-
-## Phase 2: Redis Cache-Aside (current)
-
-### How it works
-
-```
-GET /{short_code}
-  │
-  ├─ Redis GET url:cache:{short_code}
-  │      ├── HIT  → 307 redirect immediately  (no MySQL read)
-  │      │          increment click_count by cached url_id
-  │      │          X-Cache: HIT
-  │      │
-  │      └── MISS → MySQL SELECT short_code (indexed)
-  │                 Redis SETEX with TTL       (lazy loading)
-  │                 307 redirect
-  │                 X-Cache: MISS
-  │
-  └─ Latency recorded to Redis list → /metrics/latency
-```
-
-### Cache design decisions
-
-| Decision | Why |
-|---|---|
-| Store `{id, url}` JSON, not just `url` | On HIT, we need `url_id` for the atomic `click_count` UPDATE — no MySQL SELECT at all |
-| `SETEX` not `SET` + `EXPIRE` | SETEX is atomic — eliminates the race window where key exists without TTL |
-| `allkeys-lru` eviction policy | When Redis hits 256MB, least recently used URL is evicted — hot URLs survive |
-| Fail-open on all Redis errors | Redis outage → MySQL-only mode, zero failed requests |
-| Eager cache on POST /shorten | First GET after creation is a HIT, not a MISS |
-| Bounded latency lists (1000 samples) | LPUSH+LTRIM — O(1) memory regardless of traffic |
-
-### Cache invalidation policy
-
-URLs in this system are **immutable after creation** — there is no update or delete endpoint, so stale cache entries are not possible by construction. The only invalidation path is time-based: if a URL has an `expires_at` set and the redirect endpoint detects it has passed, `delete_cached_url()` is called to evict the entry before returning 410 Gone. TTL-based eviction via `SETEX` handles the normal expiry case automatically. If URL mutability is added in a future phase, an explicit `delete_cached_url()` call would be required in the update/delete handler before or after the MySQL write.
-
-### New endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /metrics/latency` | p50/p95/p99 for cache HITs vs MISSes + hit rate |
-| `GET /metrics/health` | Redis ping check |
-
-### Verifying cache behaviour (Postman / curl)
-
-```bash
-# First request — cache MISS (populates Redis)
-curl -v http://localhost:8000/000001
-# Response header: X-Cache: MISS
-
-# Second request — cache HIT (no MySQL read)
-curl -v http://localhost:8000/000001
-# Response header: X-Cache: HIT
-
-# View latency comparison
-curl http://localhost:8000/metrics/latency
-# { "cache_hit_rate": "50.0%", "cache_hits": {"p50_ms": 0.3, ...}, ... }
-```
-
-## Phase 1: Core Service (current)
-
-What's implemented:
-- `POST /shorten` — validates URL, stores in MySQL, returns short code
-- `GET /{short_code}` — looks up DB, increments click count, returns 307 redirect
-- `GET /stats/{short_code}` — returns click count and metadata
-- **Base62 encoder** — maps auto-increment IDs to 6-char URL-safe codes
-- **Idempotent shortening** — same URL always returns the same short code
-- Optional URL expiry (`expires_at`) with 410 Gone response
-
-## Technical Decisions Worth Explaining in Interviews
-
-| Decision | Why |
-|---|---|
-| Encode the **auto-increment ID**, not a hash | IDs are monotonically increasing → zero collision risk, no resolution strategy needed |
-| `url_hash` CHAR(64) UNIQUE INDEX | TEXT columns can't be indexed in MySQL; SHA-256 gives O(1) duplicate detection |
-| Atomic `UPDATE click_count = click_count + 1` | Avoids read-modify-write race condition under concurrent requests |
-| `expires_at` column added in Phase 1 | Zero-cost schema addition that enables the TTL expiry story in interviews |
-| Route ordering: `/stats/{code}` before `/{code}` | FastAPI matches routes top-down; static prefix must precede catch-all |
-
-## Setup
-
-### Prerequisites
-- Python 3.11+
-- Docker & Docker Compose (for MySQL)
-
-### 1. Clone and create virtual environment
-```bash
-git clone <repo>
-cd url-shortener
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # macOS/Linux
-```
-
-### 2. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Start MySQL
-```bash
-docker compose up -d
-```
-Wait ~15 seconds for MySQL to initialise. Check health:
-```bash
-docker compose ps
-```
-
-### 4. Configure environment
-```bash
-copy .env.example .env   # Windows
-# cp .env.example .env   # macOS/Linux
-```
-The default `.env` values match the Docker Compose service — no edits needed for local dev.
-
-### 5. Run the API
-```bash
-uvicorn app.main:app --reload
-```
-Tables are created automatically on first startup via `Base.metadata.create_all`.
-
-### 6. Open Swagger UI
-[http://localhost:8000/docs](http://localhost:8000/docs)
-
-## Running Tests
-```bash
-pytest tests/ -v
-```
-The encoder unit tests run with zero infrastructure (no DB, no Docker required).
+---
 
 ## API Reference
 
 ### `POST /shorten`
 ```json
 // Request
-{ "url": "https://example.com/very/long/path" }
+{ "url": "https://github.com/Professsor69" }
 
 // Response 201
 {
   "short_code": "000001",
-  "short_url": "http://localhost:8000/000001",
-  "long_url": "https://example.com/very/long/path",
-  "created": true
+  "short_url":  "http://localhost:8000/000001",
+  "long_url":   "https://github.com/Professsor69",
+  "created":    true
 }
 ```
-Submitting the same URL again returns `"created": false` with the existing code.
+Same URL → `"created": false` with the existing code (idempotent).
+Rate limited: 10 requests per 60s per IP (sliding window).
 
 ### `GET /{short_code}`
-Returns HTTP 307 redirect to the original URL.
-Returns 404 if code not found, 410 if expired.
+307 redirect to original URL. Headers: `X-Cache: HIT|MISS`.  
+Returns 404 if not found, 410 if expired.
 
 ### `GET /stats/{short_code}`
 ```json
 {
-  "short_code": "000001",
-  "long_url": "https://example.com/very/long/path",
+  "short_code":  "000001",
+  "long_url":    "https://github.com/Professsor69",
   "click_count": 42,
-  "created_at": "2025-07-22T01:40:00",
-  "expires_at": null
+  "created_at":  "2025-07-22T01:40:00",
+  "expires_at":  null
 }
 ```
 
-## Roadmap
+### `GET /metrics/latency`
+```json
+{
+  "cache_hit_rate": "94.2%",
+  "cache_hits":   { "p50_ms": 0.3, "p95_ms": 1.1, "p99_ms": 2.8, "count": 941 },
+  "cache_misses": { "p50_ms": 18.2, "p95_ms": 55.1, "p99_ms": 91.0, "count": 58 }
+}
+```
+
+---
+
+## Technical Decisions
+
+| Decision | Why |
+|---|---|
+| Encode the **auto-increment ID**, not a hash | IDs are monotonically increasing → zero collision risk, no resolution strategy needed |
+| `url_hash` CHAR(64) UNIQUE INDEX | TEXT columns can't be indexed in MySQL; SHA-256 gives O(1) duplicate detection |
+| `SETEX` not `SET` + `EXPIRE` | SETEX is atomic — eliminates the race where a key exists without a TTL |
+| Lua script for rate limiting | All 4 Redis ops (ZREM, ZADD, ZCARD, EXPIRE) run atomically — no concurrent race between check and increment |
+| Sliding window over token bucket | Eliminates the fixed-window boundary exploit (2N requests in 2 seconds) |
+| RabbitMQ over direct MongoDB writes | `<1ms` publish vs 5-20ms DB write on the hottest path; queue buffers during DB downtime |
+| `basic_qos(prefetch_count=1)` | One message in flight per consumer — enables fair multi-worker load distribution |
+| `pool_timeout=10` (was 30) | Fail fast on pool exhaustion — don't stall requests for 30 seconds before surfacing an error |
+| Multi-stage Docker build | Builder stage installs pip packages; runtime stage copies only `/root/.local` — no build tools or cache in the final image |
+
+---
+
+## Known Limitations — Deliberate Scope Cuts
+
+These are intentional decisions, not oversights. Each one has a clearly identified production path.
+
+| Limitation | Current behaviour | Production path |
+|---|---|---|
+| **At-least-once delivery** | NACK + requeue on MongoDB error may produce duplicate click documents if a write succeeds but the ACK is lost | Idempotency keys in MongoDB (`_id` based on message hash) or distributed transaction coordination. Acceptable tradeoff: click analytics is not billing-critical, so rare overcounting beats the complexity of exactly-once. |
+| **No dead-letter queue (DLQ)** | Malformed messages are dropped via `basic_nack(requeue=False)` — no inspection path | Add `x-dead-letter-exchange` to `queue_declare`. Single argument change, excluded here to keep infrastructure simple. |
+| **MySQL max_connections gap** | 4 workers × 60 max connections = 240, exceeding MySQL 8.0's default `max_connections=151` | Add PgBouncer or ProxySQL as a connection pooler in front of MySQL, or raise `max_connections` in MySQL config. Excluded here to keep portfolio infrastructure manageable. |
+
+---
+
+## Running Tests
+
+```bash
+# All 101 unit tests (zero infrastructure required)
+pytest tests/ -v
+
+# Individual test files
+pytest tests/test_encoder.py -v        # Base62 encoder
+pytest tests/test_cache_unit.py -v     # Redis cache layer
+pytest tests/test_limiter_unit.py -v   # Sliding window rate limiter
+pytest tests/test_publisher_unit.py -v # RabbitMQ publisher
+pytest tests/test_worker_unit.py -v    # MongoDB consumer worker
+```
+
+## Running Load Tests
+
+```bash
+# Interactive web UI at http://localhost:8089
+locust --host http://localhost:8000 -f load_test/locustfile.py
+
+# Headless (saves HTML report)
+locust --headless --users 50 --spawn-rate 5 --run-time 60s \
+       --host http://localhost:8000 \
+       --html load_test/results/baseline_report.html \
+       -f load_test/locustfile.py
+
+# PowerShell script (runs baseline + 200-user test automatically)
+.\load_test\run_load_test.ps1
+```
+
+---
+
+## Project Roadmap
 
 | Phase | Feature | Status |
 |---|---|---|
-| 1 | Core API + Base62 + MySQL | ✅ Done |
-| 2 | Redis cache-aside, latency metrics | ✅ Done |
-| 3 | Custom sliding-window rate limiter | ✅ Done |
-| 4 | RabbitMQ + async analytics worker | ✅ Done |
-| 5 | Locust load testing, bottleneck analysis | 🔲 |
-| 6 | Full Docker Compose, analytics dashboard | 🔲 |
-
+| 1 | Core API + Base62 encoder + MySQL | ✅ |
+| 2 | Redis cache-aside + latency metrics | ✅ |
+| 3 | Sliding window rate limiter (Lua + Redis sorted sets) | ✅ |
+| 4 | Async click analytics (RabbitMQ → MongoDB worker) | ✅ |
+| 5 | Locust load testing + GIL bottleneck fix | ✅ |
+| 6 | Docker Compose (6 services) + analytics dashboard | ✅ |
