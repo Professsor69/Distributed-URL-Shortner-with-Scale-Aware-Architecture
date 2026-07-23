@@ -1,0 +1,21 @@
+# Single-stage — the worker is not serving HTTP traffic, so image size
+# is less critical than for the API. Keeping it simple.
+FROM python:3.13-slim
+
+LABEL org.opencontainers.image.title="URL Shortener Worker"
+LABEL org.opencontainers.image.description="Click analytics consumer — RabbitMQ → MongoDB"
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only the modules the worker needs at runtime
+COPY app/ ./app/
+COPY worker/ ./worker/
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Entrypoint: the standalone consumer process defined in Phase 4
+CMD ["python", "-m", "worker.consumer"]
