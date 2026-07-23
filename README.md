@@ -12,14 +12,57 @@ Client
         ├── Redis Cache      [Phase 2 ✅] — cache-aside, allkeys-lru, 256MB
         ├── Redis Limiter    [Phase 3 ✅] — sliding window, per-IP, Lua script
         ├── MySQL            [Phase 1 ✅] — source of truth (short_code → long_url)
-        └── RabbitMQ         [Phase 4]   — async click event publishing
+        └── RabbitMQ         [Phase 4 ✅] — async click event publishing
               └── Worker → MongoDB — click analytics (geo, device, timestamp)
 
-Load Testing: Locust  [Phase 5]
-Infrastructure:       Docker Compose (MySQL + Redis now, full stack in Phase 6)
+Load Testing: Locust [Phase 5 ✅] — 312 RPS baseline → 1283 RPS post-fix
+Infrastructure:      Docker Compose (full stack Phase 6)
 ```
 
-## Phase 4: Async Click Analytics (current)
+## Phase 5: Load Testing with Locust (current)
+
+### Setup
+```bash
+pip install locust>=2.31.0
+docker compose up -d           # MySQL, Redis, RabbitMQ, MongoDB
+uvicorn app.main:app --reload  # single-worker baseline
+```
+
+### Run the Load Test
+```bash
+# Headless (saves HTML report)
+locust --headless --users 50 --spawn-rate 5 --run-time 60s \
+       --host http://localhost:8000 \
+       --html load_test/results/baseline_report.html \
+       -f load_test/locustfile.py
+
+# Interactive (web UI at http://localhost:8089)
+locust --host http://localhost:8000 -f load_test/locustfile.py
+
+# PowerShell convenience script (runs baseline + high-load automatically)
+.\load_test\run_load_test.ps1
+```
+
+### Results Summary
+
+| Scenario | Users | RPS | GET redirect p95 | Error % |
+|---|---|---|---|---|
+| Baseline (1 worker) | 50 | 312 | 12ms | 0% |
+| High load (1 worker) | 200 | 475 | 180ms ⚠️ | 0% |
+| Post-fix (4 workers) | 200 | 1283 | 18ms ✅ | 0% |
+
+**Cache hit rate:** 94.2% (baseline) → 96.1% (post-fix)  
+**Rate limit 429s:** Expected — all Locust workers share `127.0.0.1`, caught as success in the test script.
+
+### Bottleneck: Python GIL
+
+The bottleneck under 200 concurrent users was **not the database** — MySQL queries were fast. The bottleneck was the **single uvicorn process** (GIL: one Python thread runs at a time).
+
+**Fix: `uvicorn app.main:app --workers 4`**  
+No code change. 4 independent Python processes, each with its own thread pool. RPS 475 → 1283 (+170%), p95 180ms → 18ms (10× faster).
+
+See the full analysis: [`load_test/results/load_test_report.md`](load_test/results/load_test_report.md)
+
 
 ### Architecture
 
