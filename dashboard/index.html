@@ -186,6 +186,27 @@
 
     input[type="text"]::placeholder { color: var(--text-muted); }
 
+    .url-input-field {
+      width: 100%;
+      height: 48px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      padding: 0 1rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .url-input-field:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .url-input-field::placeholder { color: var(--text-muted); }
+
     button {
       height: 48px;
       padding: 0 1.5rem;
@@ -428,6 +449,31 @@
       <span id="api-status">Checking…</span>
     </div>
   </header>
+
+  <!-- Shorten a URL -->
+  <div class="card search-card section-gap">
+    <div class="card-title">Shorten a Long URL</div>
+    <div class="input-row">
+      <div class="input-wrapper">
+        <input
+          type="text"
+          id="url-input"
+          class="url-input-field"
+          placeholder="https://example.com/some/long/path"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <button class="btn-primary" id="shorten-btn" onclick="shortenUrl()">Shorten →</button>
+    </div>
+    <div class="error-msg hidden" id="shorten-error-msg"></div>
+
+    <!-- Shorten Success Message -->
+    <div class="success-box hidden" id="shorten-success-box" style="margin-top: 1rem; padding: 1rem; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius); display: flex; align-items: center; justify-content: space-between;">
+      <span style="color: var(--success); font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;" id="success-link-text"></span>
+      <button class="copy-btn" id="success-copy-btn" onclick="copyCreatedUrl()">Copy</button>
+    </div>
+  </div>
 
   <!-- Lookup -->
   <div class="card search-card section-gap">
@@ -693,6 +739,91 @@
   document.getElementById('code-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') lookupCode();
   });
+
+  document.getElementById('url-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') shortenUrl();
+  });
+
+  /* ── Shorten URL implementation ────────────────────────────────────────── */
+  let _createdUrlForCopy = '';
+
+  async function shortenUrl() {
+    const input = document.getElementById('url-input');
+    const btn = document.getElementById('shorten-btn');
+    const url = input.value.trim();
+    const errEl = document.getElementById('shorten-error-msg');
+    const successBox = document.getElementById('shorten-success-box');
+    const successText = document.getElementById('success-link-text');
+
+    if (!url) {
+      showShortenError('Enter a URL to shorten.');
+      return;
+    }
+
+    errEl.classList.add('hidden');
+    successBox.classList.add('hidden');
+    btn.disabled = true;
+    btn.textContent = 'Shortening…';
+
+    try {
+      const r = await fetch(`${API}/shorten`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      });
+
+      if (r.status === 422) {
+        showShortenError('Invalid URL format. Make sure it starts with http:// or https://');
+        return;
+      }
+      if (r.status === 429) {
+        showShortenError('Rate limit exceeded. Please wait a bit.');
+        return;
+      }
+      if (!r.ok) {
+        showShortenError(`Server error (${r.status}).`);
+        return;
+      }
+
+      const data = await r.json();
+      const shortUrl = data.short_url;
+      _createdUrlForCopy = shortUrl;
+      successText.textContent = shortUrl;
+      successBox.classList.remove('hidden');
+
+      // Auto-fill lookup input and query it
+      document.getElementById('code-input').value = data.short_code;
+      lookupCode();
+
+    } catch (e) {
+      showShortenError('Could not reach the API. Check that the server is running.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Shorten →';
+    }
+  }
+
+  function showShortenError(msg) {
+    const el = document.getElementById('shorten-error-msg');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    document.getElementById('shorten-success-box').classList.add('hidden');
+  }
+
+  async function copyCreatedUrl() {
+    if (!_createdUrlForCopy) return;
+    const btn = document.getElementById('success-copy-btn');
+    try {
+      await navigator.clipboard.writeText(_createdUrlForCopy);
+      btn.textContent = 'Copied ✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    } catch {
+      btn.textContent = 'Failed';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    }
+  }
+
 
   /* ── Bootstrap ───────────────────────────────────────────────────────────── */
   checkHealth();
